@@ -5,7 +5,18 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>ReverQR - Instant Clipboard Sharing</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="preconnect" href="https://            if (isRetry) {
+                retryCount++;
+                if (retryCount >= maxRetries) {
+                    showStatus('❌ Unable to connect after multiple attempts. Please try the retry button or check your internet connection.', peerId ? 'mobile' : 'desktop');
+                    showRetryButton();
+                    return;
+                }
+                showStatus(`🔄 Retrying connection (${retryCount}/${maxRetries})...`, peerId ? 'mobile' : 'desktop');
+            }
+
+            // Hide retry button when attempting connection
+            document.getElementById('retry-button').classList.add('hidden');tatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
         <style>
             * {
@@ -272,6 +283,10 @@
             <button id="copy-button" class="btn hidden" onclick="copyToClipboard()">
                 <span id="copy-text">Copy to Clipboard</span>
             </button>
+            
+            <button id="retry-button" class="btn hidden" onclick="retryConnection()" style="background: linear-gradient(135deg, #ff6b6b, #ee5a52);">
+                <span id="retry-text">🔄 Retry Connection</span>
+            </button>
         </div>
     </body>
 
@@ -296,12 +311,87 @@
             document.getElementById(`instructions-${type}`).classList.add('fade-in');
         }
 
-        if (peerId) {
-            // This is phone, connect to peer and send clipboard data
+        // PeerJS configuration with fallback servers
+        const peerConfig = {
+            host: 'peerjs-server.herokuapp.com',
+            port: 443,
+            secure: true,
+            path: '/',
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        };
+
+        let currentPeer;
+        let retryCount = 0;
+        const maxRetries = 3;
+
+        function createPeer(customConfig = null) {
+            try {
+                return new Peer(customConfig || peerConfig);
+            } catch (error) {
+                console.error('Error creating peer:', error);
+                return new Peer(); // Fallback to default configuration
+            }
+        }
+
+        function initializePeer(isRetry = false) {
+            if (isRetry) {
+                retryCount++;
+                if (retryCount >= maxRetries) {
+                    showStatus('❌ Unable to connect after multiple attempts. Please check your internet connection.', peerId ? 'mobile' : 'desktop');
+                    return;
+                }
+                showStatus(`� Retrying connection (${retryCount}/${maxRetries})...`, peerId ? 'mobile' : 'desktop');
+            }
+
+            // Try different configurations
+            let peer;
+            if (retryCount === 0) {
+                peer = createPeer(); // Default PeerJS cloud
+            } else if (retryCount === 1) {
+                peer = createPeer({
+                    host: '0.peerjs.com',
+                    port: 443,
+                    secure: true,
+                    path: '/',
+                    config: {
+                        iceServers: [
+                            { urls: 'stun:stun.l.google.com:19302' },
+                            { urls: 'stun:global.stun.twilio.com:3478' }
+                        ]
+                    }
+                });
+            } else {
+                peer = createPeer(null); // Minimal config
+            }
+
+            currentPeer = peer;
+
+            peer.on('error', function(err) {
+                console.error('Peer error:', err);
+                if (err.type === 'server-error' || err.type === 'socket-error' || err.type === 'network') {
+                    setTimeout(() => initializePeer(true), 2000);
+                } else {
+                    showStatus('❌ Connection error. Please refresh the page.', peerId ? 'mobile' : 'desktop');
+                    showRetryButton();
+                }
+            });
+
+            if (peerId) {
+                setupMobileConnection(peer);
+            } else {
+                setupDesktopConnection(peer);
+            }
+        }
+
+        function setupMobileConnection(peer) {
             showStatus('📱 Connecting to desktop...', 'mobile');
             showInstructions('mobile');
             
-            const peer = new Peer();
             peer.on('open', function(id) {
                 conn = peer.connect(peerId);
                 
@@ -309,6 +399,7 @@
                     showStatus('✅ Connected to desktop!', 'connected');
                     document.getElementById('receive-clipboard').classList.remove('hidden');
                     document.getElementById('receive-clipboard').classList.add('fade-in');
+                    retryCount = 0; // Reset retry count on success
                 });
                 
                 conn.on('error', function(err) {
@@ -316,17 +407,12 @@
                     console.error('Connection error:', err);
                 });
             });
-            
-            peer.on('error', function(err) {
-                showStatus('❌ Failed to connect. Please try again.', 'mobile');
-                console.error('Peer error:', err);
-            });
-        } else {
-            // This is desktop, generate peer id and qr code
+        }
+
+        function setupDesktopConnection(peer) {
             showStatus('🖥️ Generating QR code...', 'desktop');
             showInstructions('desktop');
             
-            const peer = new Peer();
             peer.on('open', function(id) {
                 const qrCodeDiv = document.getElementById('qr-code');
                 qrCodeDiv.innerHTML = '';
@@ -342,6 +428,7 @@
                 });
                 
                 showStatus('📱 Scan QR code with your phone to connect', 'desktop');
+                retryCount = 0; // Reset retry count on success
 
                 peer.on('connection', function(connection) {
                     conn = connection;
@@ -370,11 +457,23 @@
                     });
                 });
             });
-            
-            peer.on('error', function(err) {
-                showStatus('❌ Failed to generate QR code. Please refresh the page.', 'desktop');
-                console.error('Peer error:', err);
-            });
+        }
+
+        // Initialize the connection
+        initializePeer();
+
+        function showRetryButton() {
+            document.getElementById('retry-button').classList.remove('hidden');
+            document.getElementById('retry-button').classList.add('fade-in');
+        }
+
+        function retryConnection() {
+            retryCount = 0;
+            if (currentPeer) {
+                currentPeer.destroy();
+            }
+            document.getElementById('retry-button').classList.add('hidden');
+            initializePeer();
         }
         
         function escapeHtml(unsafe) {
